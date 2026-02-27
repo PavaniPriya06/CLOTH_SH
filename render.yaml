@@ -9,16 +9,12 @@ services:
       - key: NODE_ENV
         value: production
       - key: MONGODB_URI
-        sync: false
+        value: mongodb+srv://phani200656_db_user:c97Vy27n24eCak4w@cluster3.yidfxrd.mongodb.net/tcs-store?retryWrites=true&w=majority
       - key: JWT_SECRET
-        sync: false
-      - key: CLIENT_URL
-        sync: false
+        value: tcs_super_secret_jwt_key_2026
       - key: ADMIN_EMAIL
         value: admin@tcs.com
       - key: ADMIN_PASSWORD
-        sync: false
-      - key: RAZORPAY_KEY_ID
-        sync: false
-      - key: RAZORPAY_KEY_SECRET
-        sync: false
+        value: Admin@123
+      - key: CLIENT_URL
+        value: https://cloth-sh.vercel.app
