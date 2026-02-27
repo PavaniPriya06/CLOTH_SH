@@ -1,6 +1,7 @@
 {
   "name": "tcs-fullstack",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "TCS - The Co-ord Set Studio (Full Stack)",
   "scripts": {
     "install:all": "cd backend && npm install && cd ../frontend && npm install",

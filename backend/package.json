@@ -1,6 +1,7 @@
 {
   "name": "tcs-backend",
   "version": "1.0.0",
+  "license": "MIT",
   "description": "TCS (The Co-ord Set Studio) - Backend API",
   "main": "src/server.js",
   "scripts": {
