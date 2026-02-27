@@ -102,7 +102,7 @@ const connectDB = async () => {
         console.error('═══════════════════════════════════════════════════════════════════');
         
         // In development, allow graceful degradation for setup
-        if (process.env.NODE_ENV === 'development') {
+        if (process.env.NODE_ENV !== 'production') {
             console.log('');
             console.log('⚠️ Development mode: Server will start but database operations will fail.');
             console.log('   Please configure MONGODB_URI to enable full functionality.');
@@ -111,6 +111,19 @@ const connectDB = async () => {
         
         // In production, this is a fatal error
         process.exit(1);
+    }
+
+    // Log connection type (helpful for debugging)
+    const isAtlas = uri.includes('mongodb+srv') || uri.includes('mongodb.net');
+    const isLocal = uri.includes('localhost') || uri.includes('127.0.0.1');
+    
+    if (isAtlas) {
+        console.log('🌐 Connecting to MongoDB Atlas (cloud)...');
+    } else if (isLocal) {
+        console.log('💻 Connecting to local MongoDB...');
+        if (process.env.NODE_ENV === 'production') {
+            console.warn('⚠️ WARNING: Using local MongoDB in production is not recommended!');
+        }
     }
 
     // Setup event handlers before connecting

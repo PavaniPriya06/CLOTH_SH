@@ -1,9 +1,9 @@
 services:
   - type: web
-    name: tcs-clothing-store
+    name: tcs-clothing-backend
     env: node
-    rootDir: ./
-    buildCommand: npm install && npm run build
+    rootDir: backend
+    buildCommand: npm install
     startCommand: npm start
     envVars:
       - key: NODE_ENV
@@ -11,6 +11,8 @@ services:
       - key: MONGODB_URI
         sync: false
       - key: JWT_SECRET
+        sync: false
+      - key: CLIENT_URL
         sync: false
       - key: ADMIN_EMAIL
         value: admin@tcs.com
