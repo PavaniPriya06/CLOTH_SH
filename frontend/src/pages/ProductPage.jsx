@@ -84,10 +84,30 @@ export default function ProductPage() {
                 size
             }];
 
-            // Create order with address (payment pending)
+            // Create order with address and location data (payment pending)
             const { data: order } = await api.post('/orders', {
                 items,
-                shippingAddress: address,
+                shippingAddress: {
+                    fullName: address.fullName,
+                    phone: address.phone,
+                    houseNo: address.houseNo,
+                    street: address.street,
+                    landmark: address.landmark,
+                    city: address.city,
+                    state: address.state,
+                    pincode: address.pincode
+                },
+                // Location data from AddressModal
+                location: {
+                    lat: address.lat,
+                    lng: address.lng,
+                    accuracy: address.accuracy,
+                    locationSource: address.locationSource,
+                    ipAddress: address.ipAddress,
+                    ipCity: address.ipCity,
+                    ipRegion: address.ipRegion,
+                    ipCountry: address.ipCountry
+                },
                 paymentMethod: 'Pending',  // Will be set after payment
                 saveAddress: true  // Save address to user profile
             });

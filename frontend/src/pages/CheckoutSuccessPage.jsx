@@ -1,11 +1,9 @@
 import { useEffect, useState } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
 import { motion } from 'framer-motion';
-import { FiDownload, FiShoppingBag, FiMapPin, FiHome, FiCheckCircle, FiTruck } from 'react-icons/fi';
-import api from '../utils/api';
+import { FiDownload, FiShoppingBag, FiMapPin, FiHome, FiCheckCircle, FiTruck, FiPhone, FiMail, FiCopy, FiShare2 } from 'react-icons/fi';
+import api, { getMediaUrl } from '../utils/api';
 import toast from 'react-hot-toast';
-
-const API_URL = 'http://localhost:5000';
 
 export default function CheckoutSuccessPage() {
     const { orderId } = useParams();
@@ -13,6 +11,10 @@ export default function CheckoutSuccessPage() {
     const [order, setOrder] = useState(null);
     const [loading, setLoading] = useState(true);
     const [downloading, setDownloading] = useState(false);
+    const [copied, setCopied] = useState(false);
+
+    // Determine if this is a COD order
+    const isCOD = order?.paymentMethod === 'COD' || order?.paymentMethod === 'Cash on Delivery';
 
     useEffect(() => {
         if (!orderId) { navigate('/'); return; }
@@ -32,6 +34,22 @@ export default function CheckoutSuccessPage() {
 
         fetchOrder();
     }, [orderId, navigate]);
+
+    // Copy order number to clipboard
+    const copyOrderNumber = () => {
+        if (order?.orderNumber) {
+            navigator.clipboard.writeText(order.orderNumber);
+            setCopied(true);
+            toast.success('Order number copied!');
+            setTimeout(() => setCopied(false), 2000);
+        }
+    };
+
+    // Share order via WhatsApp
+    const shareOnWhatsApp = () => {
+        const message = `🛍️ I just ordered from TCS - The Co-ord Set Studio!\n\n📦 Order: #${order?.orderNumber}\n💰 Amount: ₹${order?.totalAmount?.toLocaleString()}\n📅 Expected: ${getEstimatedDeliveryDate()}\n\nCheck them out: ${window.location.origin}`;
+        window.open(`https://wa.me/?text=${encodeURIComponent(message)}`, '_blank');
+    };
 
     const handleDownloadInvoice = async () => {
         setDownloading(true);
@@ -94,7 +112,7 @@ export default function CheckoutSuccessPage() {
                         transition={{ delay: 0.2, type: 'spring', damping: 12 }}
                         className="w-28 h-28 bg-green-100 rounded-full flex items-center justify-center mx-auto mb-6"
                     >
-                        <span className="text-5xl">🎉</span>
+                        <span className="text-5xl">{isCOD ? '🙏' : '🎉'}</span>
                     </motion.div>
                     <motion.h1
                         initial={{ opacity: 0, y: 10 }}
@@ -102,7 +120,7 @@ export default function CheckoutSuccessPage() {
                         transition={{ delay: 0.3 }}
                         className="font-serif text-4xl md:text-5xl text-charcoal mb-3"
                     >
-                        Order Placed Successfully!
+                        {isCOD ? 'Thank You for Your Order!' : 'Order Placed Successfully!'}
                     </motion.h1>
                     <motion.p
                         initial={{ opacity: 0 }}
@@ -110,7 +128,9 @@ export default function CheckoutSuccessPage() {
                         transition={{ delay: 0.4 }}
                         className="font-sans text-charcoal-muted text-lg"
                     >
-                        We're preparing your order for delivery 📦
+                        {isCOD 
+                            ? 'Your order is confirmed! Pay when you receive it 💳' 
+                            : "We're preparing your order for delivery 📦"}
                     </motion.p>
                 </div>
 
@@ -125,27 +145,65 @@ export default function CheckoutSuccessPage() {
                     <div className="bg-gradient-to-r from-charcoal to-charcoal-light px-7 py-6 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
                         <div>
                             <p className="font-sans text-cream-400 text-xs uppercase tracking-widest mb-1">Order Number</p>
-                            <p className="font-serif text-white text-3xl font-bold">#{order?.orderNumber}</p>
+                            <div className="flex items-center gap-2">
+                                <p className="font-serif text-white text-3xl font-bold">#{order?.orderNumber}</p>
+                                <button 
+                                    onClick={copyOrderNumber}
+                                    className="p-2 bg-white/10 hover:bg-white/20 rounded-lg transition-colors"
+                                    title="Copy order number"
+                                >
+                                    <FiCopy className={`w-4 h-4 ${copied ? 'text-green-400' : 'text-cream-300'}`} />
+                                </button>
+                            </div>
                         </div>
                         <div className="text-right">
-                            <p className="font-sans text-cream-400 text-xs uppercase tracking-widest mb-1">Amount Paid</p>
+                            <p className="font-sans text-cream-400 text-xs uppercase tracking-widest mb-1">
+                                {isCOD ? 'Amount to Pay' : 'Amount Paid'}
+                            </p>
                             <p className="font-sans text-gold text-3xl font-bold">₹{order?.totalAmount?.toLocaleString()}</p>
-                            <p className="font-sans text-cream-300 text-xs mt-1">✅ Payment Confirmed</p>
+                            <p className="font-sans text-cream-300 text-xs mt-1">
+                                {isCOD ? '💵 Pay on Delivery' : '✅ Payment Confirmed'}
+                            </p>
                         </div>
                     </div>
 
                     <div className="p-7 space-y-6">
-                        {/* Order Date & Status */}
-                        <div>
-                            <p className="font-sans text-xs font-bold text-charcoal-muted uppercase tracking-widest mb-2">Order Confirmed</p>
-                            <p className="font-sans text-sm text-charcoal">{orderDate}</p>
+                        {/* COD Payment Info Banner */}
+                        {isCOD && (
+                            <motion.div 
+                                initial={{ opacity: 0, x: -20 }}
+                                animate={{ opacity: 1, x: 0 }}
+                                transition={{ delay: 0.5 }}
+                                className="bg-amber-50 border-l-4 border-amber-500 rounded-xl p-4"
+                            >
+                                <p className="font-sans font-bold text-amber-900 text-sm mb-2">💵 Cash on Delivery Order</p>
+                                <ul className="space-y-1 text-xs text-amber-800 font-sans">
+                                    <li>• Please keep ₹{order?.totalAmount?.toLocaleString()} ready for delivery</li>
+                                    <li>• Cash/UPI payment accepted at delivery</li>
+                                    <li>• Order will be confirmed after delivery verification</li>
+                                </ul>
+                            </motion.div>
+                        )}
+
+                        {/* Order Technical Details */}
+                        <div className="grid grid-cols-2 gap-4">
+                            <div className="bg-cream-100 rounded-xl p-4">
+                                <p className="font-sans text-xs text-charcoal-muted uppercase tracking-wider mb-1">Order ID</p>
+                                <p className="font-mono text-sm text-charcoal font-medium truncate">{order?._id}</p>
+                            </div>
+                            <div className="bg-cream-100 rounded-xl p-4">
+                                <p className="font-sans text-xs text-charcoal-muted uppercase tracking-wider mb-1">Order Date</p>
+                                <p className="font-sans text-sm text-charcoal font-medium">{orderDate}</p>
+                            </div>
                         </div>
 
                         {/* Status Badges */}
                         <div className="flex flex-wrap items-center gap-3">
                             <span className={`px-4 py-2 rounded-full text-xs font-bold font-sans flex items-center gap-2
-                                ${order?.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>
-                                <FiCheckCircle className="w-4 h-4" /> Payment: {order?.paymentStatus}
+                                ${order?.paymentStatus === 'Paid' ? 'bg-green-100 text-green-700' : 
+                                  isCOD ? 'bg-amber-100 text-amber-700' : 'bg-amber-100 text-amber-700'}`}>
+                                <FiCheckCircle className="w-4 h-4" /> 
+                                Payment: {isCOD ? 'Pay on Delivery' : order?.paymentStatus}
                             </span>
                             <span className="px-4 py-2 rounded-full text-xs font-bold font-sans flex items-center gap-2 bg-blue-100 text-blue-700">
                                 <FiTruck className="w-4 h-4" /> Status: {order?.status}
@@ -164,7 +222,7 @@ export default function CheckoutSuccessPage() {
                                         <div key={i} className="flex items-center gap-4 bg-cream-100 rounded-2xl p-4">
                                             <div className="w-16 h-16 rounded-xl overflow-hidden bg-cream-200 flex-shrink-0">
                                                 <img
-                                                    src={item.image ? `${API_URL}${item.image}` : `https://placehold.co/64x64/F5F0E8/4A3728?text=TCS`}
+                                                    src={item.image ? getMediaUrl(item.image) : `https://placehold.co/64x64/F5F0E8/4A3728?text=TCS`}
                                                     alt={item.name}
                                                     className="w-full h-full object-cover"
                                                 />
@@ -239,8 +297,26 @@ export default function CheckoutSuccessPage() {
                                 <li>Your order is confirmed and being prepared</li>
                                 <li>You'll receive a tracking link via email & SMS</li>
                                 <li>Expected delivery within 3-5 business days</li>
-                                <li>Download your invoice for records</li>
+                                {isCOD ? (
+                                    <li>Keep ₹{order?.totalAmount?.toLocaleString()} ready for delivery</li>
+                                ) : (
+                                    <li>Download your invoice for records</li>
+                                )}
                             </ul>
+                        </div>
+
+                        {/* Share & Support Section */}
+                        <div className="flex flex-wrap items-center justify-between gap-4 pt-2 border-t border-cream-200">
+                            <button 
+                                onClick={shareOnWhatsApp}
+                                className="flex items-center gap-2 text-sm text-green-700 hover:text-green-800 font-sans font-medium"
+                            >
+                                <FiShare2 className="w-4 h-4" /> Share on WhatsApp
+                            </button>
+                            <div className="flex items-center gap-4 text-xs text-charcoal-muted font-sans">
+                                <span className="flex items-center gap-1"><FiPhone className="w-3 h-3" /> +91 98765 43210</span>
+                                <span className="flex items-center gap-1"><FiMail className="w-3 h-3" /> support@tcs.com</span>
+                            </div>
                         </div>
                     </div>
                 </motion.div>

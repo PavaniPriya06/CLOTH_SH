@@ -2,12 +2,19 @@ const router = require('express').Router();
 const Product = require('../models/Product');
 const { protect, adminOnly } = require('../middleware/auth');
 const upload = require('../middleware/upload');
+const { softDelete, restoreDeleted } = require('../utils/transactions');
 
-// GET all products (public) with filters
+// GET all products (public) with filters - excludes deleted products
 router.get('/', async (req, res) => {
     try {
-        const { category, gender, isNewArrival, isFeatured, search, sort, limit = 20, page = 1 } = req.query;
-        const filter = { isActive: true };
+        const { category, gender, isNewArrival, isFeatured, search, sort, limit = 20, page = 1, includeDeleted } = req.query;
+        const filter = { isActive: true, isDeleted: { $ne: true } };
+        
+        // Allow admin to see deleted products if explicitly requested
+        if (includeDeleted === 'true') {
+            delete filter.isDeleted;
+        }
+        
         if (category) filter.category = category;
         if (gender) filter.gender = gender;
         if (isNewArrival === 'true') filter.isNewArrival = true;
@@ -30,7 +37,7 @@ router.get('/', async (req, res) => {
     }
 });
 
-// GET single product
+// GET single product - also returns deleted products (for admin recovery)
 router.get('/:id', async (req, res) => {
     try {
         const product = await Product.findById(req.params.id);
@@ -86,11 +93,40 @@ router.put('/:id', protect, adminOnly, upload.array('images', 8), async (req, re
     }
 });
 
-// DELETE product (admin)
+// DELETE product (admin) - SOFT DELETE (data preserved for recovery)
 router.delete('/:id', protect, adminOnly, async (req, res) => {
     try {
+        const { reason } = req.body;
+        const product = await softDelete('Product', req.params.id, req.user._id, reason);
+        res.json({ message: 'Product soft deleted (can be restored)', product });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// RESTORE deleted product (admin)
+router.put('/:id/restore', protect, adminOnly, async (req, res) => {
+    try {
+        const product = await restoreDeleted('Product', req.params.id);
+        res.json({ message: 'Product restored successfully', product });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// HARD DELETE product (admin) - PERMANENT, use with caution!
+router.delete('/:id/permanent', protect, adminOnly, async (req, res) => {
+    try {
+        const { confirm } = req.body;
+        
+        if (confirm !== 'PERMANENTLY_DELETE') {
+            return res.status(400).json({ 
+                message: 'Permanent deletion requires confirmation. Send { confirm: "PERMANENTLY_DELETE" }' 
+            });
+        }
+        
         await Product.findByIdAndDelete(req.params.id);
-        res.json({ message: 'Product deleted' });
+        res.json({ message: 'Product permanently deleted (cannot be recovered)' });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }

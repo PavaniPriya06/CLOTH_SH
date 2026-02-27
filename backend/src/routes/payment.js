@@ -6,7 +6,8 @@ const Cart = require('../models/Cart');
 const Product = require('../models/Product');
 const User = require('../models/User');
 const Settings = require('../models/Settings');
-const { protect } = require('../middleware/auth');
+const Payment = require('../models/Payment');
+const { protect, adminOnly } = require('../middleware/auth');
 const { generateAndSaveInvoice } = require('../controllers/pdfController');
 const { sendOrderNotificationSMS } = require('../services/smsService');
 
@@ -14,6 +15,79 @@ const getRazorpay = () => new Razorpay({
     key_id: process.env.RAZORPAY_KEY_ID || 'rzp_test_placeholder',
     key_secret: process.env.RAZORPAY_KEY_SECRET || 'placeholder'
 });
+
+// ══════════════════════════════════════════════════════════════════════════
+// STOCK MANAGEMENT - Reduce stock ONLY after payment success
+// ══════════════════════════════════════════════════════════════════════════
+const reduceStockAfterPayment = async (order) => {
+    if (!order || order.stockReduced) {
+        console.log('⏭️ Stock already reduced or order invalid');
+        return false;
+    }
+    
+    try {
+        for (const item of order.items) {
+            if (item.product) {
+                const product = await Product.findById(item.product);
+                if (product) {
+                    const newStock = Math.max(0, product.stock - (item.quantity || 1));
+                    product.stock = newStock;
+                    await product.save();
+                    console.log(`📉 Stock reduced: ${product.name} → ${newStock} units`);
+                    
+                    // Alert for low stock
+                    if (newStock <= 5) {
+                        console.log(`⚠️ LOW STOCK ALERT: ${product.name} has only ${newStock} units left!`);
+                    }
+                }
+            }
+        }
+        
+        // Mark stock as reduced on the order
+        order.stockReduced = true;
+        order.stockReducedAt = new Date();
+        await order.save();
+        
+        console.log(`✅ Stock reduced for order ${order.orderNumber}`);
+        return true;
+    } catch (err) {
+        console.error('❌ Stock reduction error:', err.message);
+        return false;
+    }
+};
+
+// ══════════════════════════════════════════════════════════════════════════
+// PAYMENT RECORD - Create Payment record in database
+// ══════════════════════════════════════════════════════════════════════════
+const createPaymentRecord = async (paymentData) => {
+    try {
+        const payment = new Payment({
+            razorpayPaymentId: paymentData.paymentId,
+            razorpayOrderId: paymentData.razorpayOrderId,
+            razorpaySignature: paymentData.razorpaySignature,
+            order: paymentData.orderId,
+            user: paymentData.userId,
+            amount: paymentData.amount,
+            method: paymentData.method || 'UPI',
+            methodDetails: paymentData.methodDetails || {},
+            status: paymentData.status || 'PAID',
+            contact: paymentData.contact || {},
+            notes: paymentData.notes
+        });
+        
+        await payment.save();
+        console.log(`✅ Payment record created: ${paymentData.paymentId}`);
+        return payment;
+    } catch (err) {
+        // Duplicate payment is OK (idempotency)
+        if (err.code === 11000) {
+            console.log('⏭️ Payment record already exists');
+            return null;
+        }
+        console.error('❌ Payment record error:', err.message);
+        return null;
+    }
+};
 
 // Helper: Save address to user profile ONLY after successful payment
 const saveAddressToUserOnPaymentSuccess = async (userId, shippingAddress) => {
@@ -120,7 +194,7 @@ const createOrderFromCart = async (userId, paymentDetails) => {
     const shippingCharge = totalAmount > 999 ? 0 : 49;
     totalAmount += shippingCharge;
 
-    // Create order with payment details
+    // Create order with payment details - status PAID after verification
     const adminUpiId = await getAdminUpiId();
     const order = new Order({
         user: userId,
@@ -129,19 +203,40 @@ const createOrderFromCart = async (userId, paymentDetails) => {
         shippingCharge,
         shippingAddress: paymentDetails.shippingAddress,
         paymentMethod: paymentDetails.paymentMethod || 'Razorpay',
-        paymentStatus: 'Paid', // Set to Paid immediately after webhook confirms
+        paymentStatus: 'Paid',  // ✅ Verified payment
         paymentId: paymentDetails.paymentId,
         razorpayOrderId: paymentDetails.razorpayOrderId,
         razorpaySignature: paymentDetails.razorpaySignature,
-        upiId: adminUpiId,  // Store which UPI ID received the payment
-        status: 'Confirmed', // Order is CONFIRMED once payment is verified
+        upiId: adminUpiId,
+        status: 'PAID',  // ✅ Order status = PAID (verified)
         statusHistory: [
-            { status: 'Confirmed', note: 'Order auto-created after payment confirmation' }
+            { status: 'PAID', note: 'Order created after payment verification' }
         ]
     });
 
     // Save order first
     await order.save();
+
+    // ✅ REDUCE STOCK ONLY AFTER PAYMENT SUCCESS
+    await reduceStockAfterPayment(order);
+
+    // ✅ CREATE PAYMENT RECORD
+    const user = await User.findById(userId);
+    await createPaymentRecord({
+        paymentId: paymentDetails.paymentId,
+        razorpayOrderId: paymentDetails.razorpayOrderId,
+        razorpaySignature: paymentDetails.razorpaySignature,
+        orderId: order._id,
+        userId: userId,
+        amount: totalAmount,
+        method: paymentDetails.paymentMethod === 'UPI' ? 'UPI' : 'Card',
+        status: 'PAID',
+        contact: {
+            name: user?.name || '',
+            email: user?.email || '',
+            phone: user?.phone || paymentDetails.shippingAddress?.phone || ''
+        }
+    });
 
     // Populate and add invoice
     await order.populate('user', 'name email phone');
@@ -250,6 +345,85 @@ router.post('/verify', protect, async (req, res) => {
         });
     } catch (err) {
         res.status(500).json({ message: err.message });
+    }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// CASH ON DELIVERY (COD) - Place order with pay on delivery
+// ══════════════════════════════════════════════════════════════════════════
+router.post('/cod', protect, async (req, res) => {
+    try {
+        const { orderId } = req.body;
+        
+        if (!orderId) {
+            return res.status(400).json({ success: false, message: 'Order ID is required' });
+        }
+        
+        // Find the existing order
+        const order = await Order.findById(orderId);
+        if (!order) {
+            return res.status(404).json({ success: false, message: 'Order not found' });
+        }
+        
+        // Verify user owns this order
+        if (order.user.toString() !== req.user._id.toString()) {
+            return res.status(403).json({ success: false, message: 'Unauthorized' });
+        }
+        
+        // Check COD limit (max ₹5,000)
+        if (order.totalAmount > 5000) {
+            return res.status(400).json({ 
+                success: false, 
+                message: 'COD is only available for orders up to ₹5,000' 
+            });
+        }
+        
+        // Update order for COD
+        order.paymentMethod = 'COD';
+        order.paymentStatus = 'Pending'; // Payment will be collected on delivery
+        order.status = 'PLACED';
+        order.statusHistory.push({
+            status: 'PLACED',
+            note: 'Cash on Delivery order placed'
+        });
+        
+        await order.save();
+        
+        // Populate for response
+        await order.populate('user', 'name email phone');
+        
+        // Generate PDF invoice
+        try {
+            const invoiceData = await generateAndSaveInvoice(order);
+            order.invoicePath = invoiceData.invoicePath;
+            order.invoiceUrl = invoiceData.invoiceUrl;
+            await order.save();
+        } catch (invoiceErr) {
+            console.error('Invoice generation error:', invoiceErr.message);
+        }
+        
+        // Send SMS notification
+        try {
+            await sendOrderNotificationSMS(order);
+        } catch (smsErr) {
+            console.error('SMS notification error:', smsErr.message);
+        }
+        
+        // Save address to user profile
+        await saveAddressToUserOnPaymentSuccess(req.user._id, order.shippingAddress);
+        
+        // Clear user's cart
+        await Cart.findOneAndUpdate({ user: req.user._id }, { items: [] });
+        
+        res.json({
+            success: true,
+            message: 'COD order placed successfully',
+            orderId: order._id.toString(),
+            orderNumber: order.orderNumber
+        });
+    } catch (err) {
+        console.error('COD order error:', err);
+        res.status(500).json({ success: false, message: err.message });
     }
 });
 
@@ -434,6 +608,16 @@ router.post('/verify-upi', protect, async (req, res) => {
         const expectedSignature = hmac.digest('hex');
 
         if (expectedSignature !== razorpay_signature) {
+            // ❌ Payment signature invalid - reject and record as failed
+            await createPaymentRecord({
+                paymentId: razorpay_payment_id,
+                razorpayOrderId: razorpay_order_id,
+                orderId: orderId,
+                userId: req.user._id,
+                amount: 0,
+                status: 'FAILED',
+                notes: { error: 'Invalid signature' }
+            });
             return res.status(400).json({ success: false, message: 'Invalid payment signature' });
         }
 
@@ -453,17 +637,37 @@ router.post('/verify-upi', protect, async (req, res) => {
             });
         }
 
+        // ✅ Update order to PAID status
         order.paymentStatus = 'Paid';
         order.paymentId = razorpay_payment_id;
         order.razorpaySignature = razorpay_signature;
         order.paymentMethod = 'UPI';
-        order.status = 'Placed';
+        order.status = 'PAID';
         order.statusHistory.push({ 
-            status: 'Placed', 
+            status: 'PAID', 
             note: 'Payment verified via Razorpay UPI' 
         });
         
         await order.save();
+
+        // ✅ REDUCE STOCK ONLY AFTER PAYMENT SUCCESS
+        await reduceStockAfterPayment(order);
+
+        // ✅ CREATE PAYMENT RECORD
+        await createPaymentRecord({
+            paymentId: razorpay_payment_id,
+            razorpayOrderId: razorpay_order_id,
+            razorpaySignature: razorpay_signature,
+            orderId: order._id,
+            userId: req.user._id,
+            amount: order.totalAmount,
+            method: 'UPI',
+            status: 'PAID',
+            contact: {
+                name: order.shippingAddress?.fullName || '',
+                phone: order.shippingAddress?.phone || ''
+            }
+        });
 
         // ── SAVE ADDRESS TO USER ONLY AFTER PAYMENT SUCCESS ──
         await saveAddressToUserOnPaymentSuccess(req.user._id, order.shippingAddress);
@@ -493,6 +697,86 @@ router.post('/verify-upi', protect, async (req, res) => {
             message: 'Payment verified successfully',
             orderId: order._id.toString(),
             orderNumber: order.orderNumber
+        });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// ══════════════════════════════════════════════════════════════════════════
+// ADMIN ENDPOINTS - View Payments, Stock Alerts
+// ══════════════════════════════════════════════════════════════════════════
+
+// Admin: Get all payments
+router.get('/admin/all', protect, adminOnly, async (req, res) => {
+    try {
+        const { status, page = 1, limit = 50 } = req.query;
+        const filter = status ? { status } : {};
+        
+        const payments = await Payment.find(filter)
+            .populate('user', 'name email phone')
+            .populate('order', 'orderNumber totalAmount status')
+            .sort({ createdAt: -1 })
+            .limit(Number(limit))
+            .skip((Number(page) - 1) * Number(limit));
+        
+        const total = await Payment.countDocuments(filter);
+        const stats = {
+            total: await Payment.countDocuments(),
+            paid: await Payment.countDocuments({ status: 'PAID' }),
+            failed: await Payment.countDocuments({ status: 'FAILED' }),
+            pending: await Payment.countDocuments({ status: 'PENDING' }),
+            totalRevenue: await Payment.aggregate([
+                { $match: { status: 'PAID' } },
+                { $group: { _id: null, total: { $sum: '$amount' } } }
+            ]).then(r => r[0]?.total || 0)
+        };
+        
+        res.json({ payments, total, stats });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Admin: Get payment by ID
+router.get('/admin/:paymentId', protect, adminOnly, async (req, res) => {
+    try {
+        const payment = await Payment.findOne({ razorpayPaymentId: req.params.paymentId })
+            .populate('user', 'name email phone')
+            .populate('order', 'orderNumber totalAmount status items shippingAddress');
+        
+        if (!payment) {
+            return res.status(404).json({ message: 'Payment not found' });
+        }
+        
+        res.json(payment);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// Admin: Get low stock products
+router.get('/admin/stock/alerts', protect, adminOnly, async (req, res) => {
+    try {
+        const threshold = Number(req.query.threshold) || 10;
+        
+        const lowStockProducts = await Product.find({ stock: { $lte: threshold } })
+            .sort({ stock: 1 })
+            .select('name stock price images category');
+        
+        const outOfStock = lowStockProducts.filter(p => p.stock === 0);
+        const criticalStock = lowStockProducts.filter(p => p.stock > 0 && p.stock <= 5);
+        const lowStock = lowStockProducts.filter(p => p.stock > 5);
+        
+        res.json({
+            outOfStock,
+            criticalStock,
+            lowStock,
+            summary: {
+                outOfStockCount: outOfStock.length,
+                criticalCount: criticalStock.length,
+                lowStockCount: lowStock.length
+            }
         });
     } catch (err) {
         res.status(500).json({ message: err.message });

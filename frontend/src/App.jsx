@@ -14,6 +14,8 @@ import AdminLogin from './pages/AdminLogin';
 import OrdersPage from './pages/OrdersPage';
 import AdminDashboard from './pages/AdminDashboard';
 import CheckoutSuccessPage from './pages/CheckoutSuccessPage';
+import PaymentCallbackPage from './pages/PaymentCallbackPage';
+import PaymentFailurePage from './pages/PaymentFailurePage';
 
 // OAuth callback handler
 function OAuthCallback() {
@@ -65,6 +67,8 @@ export default function App() {
                         <Route path="/orders" element={<Layout><ProtectedRoute><OrdersPage /></ProtectedRoute></Layout>} />
                         <Route path="/order-success/:orderId" element={<ProtectedRoute><CheckoutSuccessPage /></ProtectedRoute>} />
                         <Route path="/checkout-success/:orderId" element={<ProtectedRoute><CheckoutSuccessPage /></ProtectedRoute>} />
+                        <Route path="/payment-callback/:orderId" element={<PaymentCallbackPage />} />
+                        <Route path="/payment-failed/:orderId" element={<PaymentFailurePage />} />
                         <Route path="/admin/login" element={<AdminLogin />} />
                         <Route path="/admin" element={<ProtectedRoute adminOnly><AdminDashboard /></ProtectedRoute>} />
                         <Route path="*" element={<Navigate to="/" replace />} />

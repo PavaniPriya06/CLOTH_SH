@@ -1,6 +1,6 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiX, FiMapPin, FiUser, FiPhone, FiChevronDown } from 'react-icons/fi';
+import { FiX, FiMapPin, FiUser, FiPhone, FiChevronDown, FiNavigation } from 'react-icons/fi';
 
 const INDIAN_STATES = [
     'Andhra Pradesh', 'Arunachal Pradesh', 'Assam', 'Bihar', 'Chandigarh',
@@ -31,9 +31,87 @@ export default function AddressModal({ isOpen, onClose, onSubmit, initialData = 
         landmark: '',
         city: '',
         state: '',
+        // Location data
+        lat: null,
+        lng: null,
+        accuracy: null,
+        locationSource: 'Unknown',
+        ipAddress: '',
+        ipCity: '',
+        ipRegion: '',
+        ipCountry: '',
         ...initialData
     });
     const [errors, setErrors] = useState({});
+    const [locationStatus, setLocationStatus] = useState('idle'); // idle, loading, success, denied
+
+    // ══════════════════════════════════════════════════════════════════════════
+    // LOCATION CAPTURE - Browser GPS + IP fallback
+    // ══════════════════════════════════════════════════════════════════════════
+    useEffect(() => {
+        if (!isOpen) return;
+        
+        // Start with IP-based location (always works, no permission needed)
+        fetchIPLocation();
+        
+        // Then try browser geolocation (with permission)
+        requestBrowserLocation();
+    }, [isOpen]);
+
+    const fetchIPLocation = async () => {
+        try {
+            // Using free IP geolocation API
+            const response = await fetch('https://ipapi.co/json/');
+            if (response.ok) {
+                const data = await response.json();
+                setForm(f => ({
+                    ...f,
+                    ipAddress: data.ip || '',
+                    ipCity: data.city || '',
+                    ipRegion: data.region || '',
+                    ipCountry: data.country_name || '',
+                    // Auto-fill city and state if empty
+                    city: f.city || data.city || '',
+                    state: f.state || data.region || '',
+                    locationSource: f.lat ? f.locationSource : 'IP'
+                }));
+            }
+        } catch (err) {
+            console.log('IP location fetch failed:', err.message);
+        }
+    };
+
+    const requestBrowserLocation = () => {
+        if (!navigator.geolocation) {
+            setLocationStatus('denied');
+            return;
+        }
+
+        setLocationStatus('loading');
+
+        navigator.geolocation.getCurrentPosition(
+            (position) => {
+                setForm(f => ({
+                    ...f,
+                    lat: position.coords.latitude,
+                    lng: position.coords.longitude,
+                    accuracy: position.coords.accuracy,
+                    locationSource: 'GPS'
+                }));
+                setLocationStatus('success');
+            },
+            (error) => {
+                console.log('Geolocation error:', error.message);
+                setLocationStatus('denied');
+                // IP location will be used as fallback
+            },
+            {
+                enableHighAccuracy: true,
+                timeout: 10000,
+                maximumAge: 300000 // 5 minutes cache
+            }
+        );
+    };
 
     const validate = () => {
         const e = {};
@@ -94,6 +172,31 @@ export default function AddressModal({ isOpen, onClose, onSubmit, initialData = 
                     </div>
 
                     <form onSubmit={handleSubmit} className="p-8 space-y-5">
+                        {/* Location Status Indicator */}
+                        <div className={`flex items-center gap-3 p-3 rounded-xl text-sm font-sans ${
+                            locationStatus === 'success' ? 'bg-green-50 text-green-700' :
+                            locationStatus === 'loading' ? 'bg-blue-50 text-blue-700' :
+                            locationStatus === 'denied' ? 'bg-amber-50 text-amber-700' :
+                            'bg-gray-50 text-gray-600'
+                        }`}>
+                            <FiNavigation className={`w-4 h-4 ${locationStatus === 'loading' ? 'animate-pulse' : ''}`} />
+                            <span>
+                                {locationStatus === 'success' && '📍 GPS location captured for faster delivery'}
+                                {locationStatus === 'loading' && '📡 Getting your location...'}
+                                {locationStatus === 'denied' && `📌 Using IP location: ${form.ipCity || 'Unknown'}, ${form.ipRegion || 'India'}`}
+                                {locationStatus === 'idle' && '🔄 Initializing location services...'}
+                            </span>
+                            {locationStatus === 'denied' && (
+                                <button 
+                                    type="button"
+                                    onClick={requestBrowserLocation}
+                                    className="ml-auto text-xs underline hover:no-underline"
+                                >
+                                    Retry GPS
+                                </button>
+                            )}
+                        </div>
+
                         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                             {FIELD_CONFIG.map(({ key, label, placeholder, icon: Icon, type = 'text', col, optional, maxLength }) => (
                                 <div key={key} className={col === 'full' ? 'md:col-span-2' : ''}>

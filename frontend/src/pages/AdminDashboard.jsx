@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiPlus, FiEdit2, FiTrash2, FiPackage, FiShoppingBag, FiUsers, FiX, FiUpload, FiLogOut, FiSettings, FiDownload } from 'react-icons/fi';
+import { FiPlus, FiEdit2, FiTrash2, FiPackage, FiShoppingBag, FiUsers, FiX, FiUpload, FiLogOut, FiSettings, FiDownload, FiDollarSign, FiAlertTriangle } from 'react-icons/fi';
 import api from '../utils/api';
 import { useAuth } from '../context/AuthContext';
 import toast from 'react-hot-toast';
@@ -10,10 +10,16 @@ const CATEGORIES = ['Co-ord Sets', 'Tops', 'Bottoms', 'Dresses', 'New Arrivals',
 const GRADES = ['Premium', 'Export', 'Regular'];
 const GENDERS = ['Men', 'Women', 'Kids', 'Unisex'];
 const SIZES = ['XS', 'S', 'M', 'L', 'XL', 'XXL', 'Free Size'];
-const ORDER_STATUSES = ['Pending', 'Confirmed', 'Shipped', 'Delivered', 'Cancelled'];
+const ORDER_STATUSES = ['CREATED', 'PENDING', 'PAID', 'PLACED', 'SHIPPED', 'DELIVERED', 'CANCELLED'];
 
 const statusClass = {
-    Pending: 'status-pending', Confirmed: 'status-confirmed', Shipped: 'status-shipped', Delivered: 'status-delivered', Cancelled: 'status-cancelled'
+    CREATED: 'bg-gray-100 text-gray-700',
+    PENDING: 'bg-amber-100 text-amber-700', 
+    PAID: 'bg-green-100 text-green-700',
+    PLACED: 'bg-blue-100 text-blue-700',
+    SHIPPED: 'bg-purple-100 text-purple-700', 
+    DELIVERED: 'bg-emerald-100 text-emerald-700',
+    CANCELLED: 'bg-red-100 text-red-700'
 };
 
 export default function AdminDashboard() {
@@ -21,7 +27,10 @@ export default function AdminDashboard() {
     const [tab, setTab] = useState('products');
     const [products, setProducts] = useState([]);
     const [orders, setOrders] = useState([]);
-    const [stats, setStats] = useState({ products: 0, orders: 0, revenue: 0 });
+    const [payments, setPayments] = useState([]);
+    const [paymentStats, setPaymentStats] = useState({ total: 0, paid: 0, failed: 0, pending: 0, totalRevenue: 0 });
+    const [stockAlerts, setStockAlerts] = useState({ outOfStock: [], criticalStock: [], lowStock: [] });
+    const [stats, setStats] = useState({ products: 0, orders: 0, revenue: 0, payments: 0 });
     const [showProductForm, setShowProductForm] = useState(false);
     const [editProduct, setEditProduct] = useState(null);
     const [loading, setLoading] = useState(false);
@@ -32,7 +41,7 @@ export default function AdminDashboard() {
     const emptyForm = { name: '', price: '', originalPrice: '', gender: 'Women', qualityGrade: 'Regular', description: '', category: 'Co-ord Sets', sizes: [], stock: 10, isFeatured: false, isNewArrival: true, images: [] };
     const [form, setForm] = useState(emptyForm);
 
-    useEffect(() => { fetchProducts(); fetchOrders(); }, []);
+    useEffect(() => { fetchProducts(); fetchOrders(); fetchPayments(); fetchStockAlerts(); }, []);
 
     const fetchProducts = async () => {
         try {
@@ -49,6 +58,26 @@ export default function AdminDashboard() {
             const revenue = (data.orders || []).reduce((s, o) => s + (o.paymentStatus === 'Paid' ? o.totalAmount : 0), 0);
             setStats(s => ({ ...s, orders: data.total || 0, revenue }));
         } catch { }
+    };
+
+    const fetchPayments = async () => {
+        try {
+            const { data } = await api.get('/payment/admin/all');
+            setPayments(data.payments || []);
+            setPaymentStats(data.stats || {});
+            setStats(s => ({ ...s, payments: data.total || 0 }));
+        } catch (err) {
+            console.log('Payments fetch:', err.message);
+        }
+    };
+
+    const fetchStockAlerts = async () => {
+        try {
+            const { data } = await api.get('/payment/admin/stock/alerts?threshold=10');
+            setStockAlerts(data);
+        } catch (err) {
+            console.log('Stock alerts fetch:', err.message);
+        }
     };
 
     const handleImageChange = (e) => {
@@ -156,12 +185,16 @@ export default function AdminDashboard() {
                         {[
                             { id: 'products', label: 'Products', icon: FiShoppingBag },
                             { id: 'orders', label: 'Orders', icon: FiPackage },
+                            { id: 'payments', label: 'Payments', icon: FiDollarSign },
                             { id: 'settings', label: 'Settings', icon: FiSettings },
                         ].map(item => (
                             <button key={item.id} onClick={() => setTab(item.id)}
                                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl font-sans text-sm transition-all ${tab === item.id ? 'bg-gold text-charcoal font-medium' : 'text-cream-300 hover:bg-charcoal-light hover:text-cream-100'}`}>
                                 <item.icon className="w-5 h-5" />
                                 {item.label}
+                                {item.id === 'payments' && paymentStats.failed > 0 && (
+                                    <span className="ml-auto bg-red-500 text-white text-xs px-2 py-0.5 rounded-full">{paymentStats.failed}</span>
+                                )}
                             </button>
                         ))}
                     </nav>
@@ -178,7 +211,7 @@ export default function AdminDashboard() {
                     <div className="bg-white border-b border-cream-200 px-8 py-6">
                         <div className="flex items-center justify-between">
                             <h1 className="font-serif text-2xl text-charcoal">
-                                {tab === 'products' ? 'Product Management' : tab === 'orders' ? 'Order Management' : 'Store Settings'}
+                                {tab === 'products' ? 'Product Management' : tab === 'orders' ? 'Order Management' : tab === 'payments' ? 'Payment Management' : 'Store Settings'}
                             </h1>
                             {tab === 'products' && (
                                 <button onClick={() => { setShowProductForm(true); setEditProduct(null); setForm(emptyForm); setImagePreviews([]); }}
@@ -187,19 +220,60 @@ export default function AdminDashboard() {
                                 </button>
                             )}
                         </div>
-                        <div className="grid grid-cols-3 gap-6 mt-6">
-                            {[
-                                { label: 'Total Products', value: stats.products, icon: '👗' },
-                                { label: 'Total Orders', value: stats.orders, icon: '📦' },
-                                { label: 'Revenue (Paid)', value: `₹${stats.revenue.toLocaleString()}`, icon: '💰' },
-                            ].map(stat => (
-                                <div key={stat.label} className="bg-cream-100 rounded-2xl p-4">
-                                    <p className="text-2xl mb-1">{stat.icon}</p>
-                                    <p className="font-serif text-2xl text-charcoal">{stat.value}</p>
-                                    <p className="font-sans text-xs text-charcoal-muted">{stat.label}</p>
+                        
+                        {/* Dynamic stats based on tab */}
+                        {tab === 'payments' ? (
+                            <div className="grid grid-cols-4 gap-6 mt-6">
+                                {[
+                                    { label: 'Total Payments', value: paymentStats.total, icon: '💳', color: 'bg-blue-50' },
+                                    { label: 'Paid', value: paymentStats.paid, icon: '✅', color: 'bg-green-50' },
+                                    { label: 'Failed', value: paymentStats.failed, icon: '❌', color: 'bg-red-50' },
+                                    { label: 'Total Revenue', value: `₹${paymentStats.totalRevenue?.toLocaleString()}`, icon: '💰', color: 'bg-amber-50' },
+                                ].map(stat => (
+                                    <div key={stat.label} className={`${stat.color} rounded-2xl p-4`}>
+                                        <p className="text-2xl mb-1">{stat.icon}</p>
+                                        <p className="font-serif text-2xl text-charcoal">{stat.value}</p>
+                                        <p className="font-sans text-xs text-charcoal-muted">{stat.label}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        ) : (
+                            <div className="grid grid-cols-3 gap-6 mt-6">
+                                {[
+                                    { label: 'Total Products', value: stats.products, icon: '👗' },
+                                    { label: 'Total Orders', value: stats.orders, icon: '📦' },
+                                    { label: 'Revenue (Paid)', value: `₹${stats.revenue.toLocaleString()}`, icon: '💰' },
+                                ].map(stat => (
+                                    <div key={stat.label} className="bg-cream-100 rounded-2xl p-4">
+                                        <p className="text-2xl mb-1">{stat.icon}</p>
+                                        <p className="font-serif text-2xl text-charcoal">{stat.value}</p>
+                                        <p className="font-sans text-xs text-charcoal-muted">{stat.label}</p>
+                                    </div>
+                                ))}
+                            </div>
+                        )}
+                        
+                        {/* Stock Alerts Banner */}
+                        {tab === 'products' && (stockAlerts.outOfStock?.length > 0 || stockAlerts.criticalStock?.length > 0) && (
+                            <div className="mt-4 bg-red-50 border border-red-200 rounded-2xl p-4">
+                                <div className="flex items-center gap-2 text-red-700 font-sans text-sm font-bold mb-2">
+                                    <FiAlertTriangle className="w-5 h-5" />
+                                    Stock Alerts
                                 </div>
-                            ))}
-                        </div>
+                                <div className="flex flex-wrap gap-2">
+                                    {stockAlerts.outOfStock?.map(p => (
+                                        <span key={p._id} className="bg-red-100 text-red-700 text-xs px-3 py-1 rounded-full font-sans">
+                                            {p.name}: OUT OF STOCK
+                                        </span>
+                                    ))}
+                                    {stockAlerts.criticalStock?.map(p => (
+                                        <span key={p._id} className="bg-amber-100 text-amber-700 text-xs px-3 py-1 rounded-full font-sans">
+                                            {p.name}: {p.stock} left
+                                        </span>
+                                    ))}
+                                </div>
+                            </div>
+                        )}
                     </div>
 
                     {/* Content */}
@@ -349,6 +423,92 @@ export default function AdminDashboard() {
                                 )) : (
                                     <div className="card p-8 text-center">
                                         <p className="font-sans text-charcoal-muted">📦 No orders yet</p>
+                                    </div>
+                                )}
+                            </div>
+                        )}
+
+                        {/* Payments Tab */}
+                        {tab === 'payments' && (
+                            <div className="space-y-4">
+                                {payments.length > 0 ? payments.map(payment => (
+                                    <motion.div key={payment._id} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
+                                        className="card p-6 hover:shadow-soft transition-shadow">
+                                        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+                                            {/* Payment Info */}
+                                            <div className="flex-1">
+                                                <div className="flex items-center gap-3 mb-2">
+                                                    <span className={`px-3 py-1 rounded-full text-xs font-bold font-sans ${
+                                                        payment.status === 'PAID' ? 'bg-green-100 text-green-700' :
+                                                        payment.status === 'FAILED' ? 'bg-red-100 text-red-700' :
+                                                        'bg-amber-100 text-amber-700'
+                                                    }`}>
+                                                        {payment.status}
+                                                    </span>
+                                                    <span className="font-sans text-xs text-charcoal-muted bg-cream-100 px-2 py-1 rounded">
+                                                        {payment.method}
+                                                    </span>
+                                                </div>
+                                                <p className="font-mono text-xs text-charcoal-muted mb-1">
+                                                    ID: {payment.razorpayPaymentId || 'N/A'}
+                                                </p>
+                                                <p className="font-sans text-sm text-charcoal">
+                                                    {new Date(payment.createdAt).toLocaleDateString('en-IN')} at {new Date(payment.createdAt).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit' })}
+                                                </p>
+                                            </div>
+
+                                            {/* Customer Info */}
+                                            <div className="flex-1">
+                                                <p className="font-sans text-xs text-charcoal-muted uppercase tracking-widest mb-1">Customer</p>
+                                                <p className="font-sans text-sm font-medium text-charcoal">{payment.user?.name || payment.contact?.name || 'Unknown'}</p>
+                                                <p className="font-sans text-xs text-charcoal-muted">{payment.user?.email || payment.contact?.email || ''}</p>
+                                                <p className="font-sans text-xs text-charcoal-muted">{payment.user?.phone || payment.contact?.phone || ''}</p>
+                                            </div>
+
+                                            {/* Order Info */}
+                                            <div className="flex-1">
+                                                <p className="font-sans text-xs text-charcoal-muted uppercase tracking-widest mb-1">Order</p>
+                                                {payment.order ? (
+                                                    <>
+                                                        <p className="font-serif text-sm font-bold text-charcoal">#{payment.order.orderNumber}</p>
+                                                        <p className={`font-sans text-xs px-2 py-0.5 rounded inline-block mt-1 ${statusClass[payment.order.status] || 'bg-gray-100 text-gray-700'}`}>
+                                                            {payment.order.status}
+                                                        </p>
+                                                    </>
+                                                ) : (
+                                                    <p className="font-sans text-xs text-charcoal-muted">No order linked</p>
+                                                )}
+                                            </div>
+
+                                            {/* Amount */}
+                                            <div className="text-right">
+                                                <p className="font-sans text-xs text-charcoal-muted uppercase tracking-widest mb-1">Amount</p>
+                                                <p className="font-serif text-2xl font-bold text-charcoal">₹{payment.amount?.toLocaleString()}</p>
+                                            </div>
+                                        </div>
+
+                                        {/* UPI Details if available */}
+                                        {payment.methodDetails?.upiId && (
+                                            <div className="mt-4 pt-4 border-t border-cream-200">
+                                                <p className="font-sans text-xs text-charcoal-muted">
+                                                    <span className="font-bold">UPI ID:</span> {payment.methodDetails.upiId}
+                                                    {payment.methodDetails.upiApp && ` via ${payment.methodDetails.upiApp}`}
+                                                </p>
+                                            </div>
+                                        )}
+
+                                        {/* Error details for failed payments */}
+                                        {payment.status === 'FAILED' && payment.razorpayError?.description && (
+                                            <div className="mt-4 pt-4 border-t border-red-200 bg-red-50 -mx-6 -mb-6 px-6 pb-6 rounded-b-2xl">
+                                                <p className="font-sans text-xs text-red-700">
+                                                    <span className="font-bold">Error:</span> {payment.razorpayError.description}
+                                                </p>
+                                            </div>
+                                        )}
+                                    </motion.div>
+                                )) : (
+                                    <div className="card p-8 text-center">
+                                        <p className="font-sans text-charcoal-muted">💳 No payments recorded yet</p>
                                     </div>
                                 )}
                             </div>

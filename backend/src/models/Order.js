@@ -1,8 +1,8 @@
 const mongoose = require('mongoose');
 
 const orderSchema = new mongoose.Schema({
-    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
-    orderNumber: { type: String, unique: true },
+    user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true, index: true },
+    orderNumber: { type: String, unique: true, index: true },
     items: [{
         product: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
         name: String,
@@ -16,17 +16,20 @@ const orderSchema = new mongoose.Schema({
     shippingCharge: { type: Number, default: 0 },
     status: {
         type: String,
-        enum: ['Pending', 'Placed', 'Shipped', 'Delivered', 'Cancelled'],
-        default: 'Pending'
+        enum: ['CREATED', 'PENDING', 'PAID', 'PLACED', 'SHIPPED', 'DELIVERED', 'CANCELLED'],
+        default: 'CREATED',
+        index: true
     },
-    paymentMethod: { type: String, enum: ['COD', 'Razorpay', 'UPI', 'Pending'], default: 'Pending' },
-    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded'], default: 'Pending' },
-    paymentId: { type: String, sparse: true, unique: true },  // Unique to prevent duplicate payments
-    razorpayOrderId: { type: String },
-    razorpaySignature: { type: String },  // Store signature for verification
-    upiId: { type: String },  // Admin's UPI ID to which payment was sent
-    upiTransactionId: { type: String },  // UPI transaction reference from user
-    paymentReceipt: { type: String },  // Payment receipt/screenshot from user for UPI
+    paymentMethod: { type: String, enum: ['COD', 'Razorpay', 'UPI', 'Card', 'NetBanking', 'Wallet', 'Pending'], default: 'Pending' },
+    paymentStatus: { type: String, enum: ['Pending', 'Paid', 'Failed', 'Refunded'], default: 'Pending', index: true },
+    paymentId: { type: String, sparse: true, unique: true, index: true },  // Razorpay payment ID - unique to prevent duplicates
+    razorpayOrderId: { type: String, index: true },
+    razorpaySignature: { type: String },
+    upiId: { type: String },
+    upiTransactionId: { type: String },
+    paymentReceipt: { type: String },
+    
+    // Shipping address with location
     shippingAddress: {
         fullName: String,
         phone: String,
@@ -36,24 +39,55 @@ const orderSchema = new mongoose.Schema({
         city: String,
         state: String,
         pincode: String,
+        // Geolocation data
         lat: Number,
-        lng: Number
+        lng: Number,
+        accuracy: Number,           // GPS accuracy in meters
+        locationSource: { type: String, enum: ['GPS', 'IP', 'Manual', 'Unknown'], default: 'Unknown' },
+        ipAddress: String,          // IP address at order time
+        ipCity: String,             // City from IP lookup
+        ipRegion: String,           // State/Region from IP lookup
+        ipCountry: String           // Country from IP lookup
     },
-    invoicePath: { type: String },  // Path to generated PDF invoice
-    invoiceUrl: { type: String },  // URL to access invoice
-    pdfPath: { type: String },  // Legacy - kept for compatibility
+    
+    // Stock reduction tracking
+    stockReduced: { type: Boolean, default: false },  // Track if stock was reduced for this order
+    stockReducedAt: { type: Date },
+    
+    invoicePath: { type: String },
+    invoiceUrl: { type: String },
+    pdfPath: { type: String },
     notes: { type: String },
+    
     // SMS Notifications
-    smsSent: { type: Boolean, default: false },  // Track if SMS was sent to user
-    smsAdminSent: { type: Boolean, default: false },  // Track if SMS was sent to admin
-    smsError: { type: String },  // Store error message if SMS fails
-    lastSmsSendAttempt: { type: Date },  // Track last SMS send attempt for retry
+    smsSent: { type: Boolean, default: false },
+    smsAdminSent: { type: Boolean, default: false },
+    smsError: { type: String },
+    lastSmsSendAttempt: { type: Date },
+    
     statusHistory: [{
         status: String,
         timestamp: { type: Date, default: Date.now },
         note: String
-    }]
+    }],
+    
+    // ═══════════════════════════════════════════════════════════════════
+    // SOFT DELETE - Never permanently delete order data
+    // ═══════════════════════════════════════════════════════════════════
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    deletionReason: { type: String }
 }, { timestamps: true });
+
+// ═══════════════════════════════════════════════════════════════════
+// INDEXES for faster queries
+// ═══════════════════════════════════════════════════════════════════
+orderSchema.index({ user: 1, createdAt: -1 });           // User's orders sorted by date
+orderSchema.index({ status: 1, createdAt: -1 });         // Orders by status
+orderSchema.index({ paymentStatus: 1, status: 1 });      // Payment filtering
+orderSchema.index({ isDeleted: 1, status: 1 });          // Admin queries
+orderSchema.index({ createdAt: -1 });                     // Recent orders
 
 // Auto-generate order number
 orderSchema.pre('save', async function (next) {

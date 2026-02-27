@@ -5,11 +5,12 @@ const User = require('../models/User');
 const Settings = require('../models/Settings');
 const { protect, adminOnly } = require('../middleware/auth');
 const { generateReceipt } = require('../controllers/pdfController');
+const { cancelOrderWithStockRestore, softDelete, restoreDeleted } = require('../utils/transactions');
 
 // Create order (for COD / manual orders / Buy Now)
 router.post('/', protect, async (req, res) => {
     try {
-        const { items, shippingAddress, paymentMethod, notes, saveAddress } = req.body;
+        const { items, shippingAddress, paymentMethod, notes, saveAddress, location } = req.body;
         if (!items || items.length === 0) return res.status(400).json({ message: 'No items in order' });
 
         // Validate shipping address is provided
@@ -51,6 +52,21 @@ router.post('/', protect, async (req, res) => {
             pincode: addr.pincode || ''
         };
 
+        // ══════════════════════════════════════════════════════════════════════════
+        // LOCATION DATA - Capture user's location at order time
+        // ══════════════════════════════════════════════════════════════════════════
+        const loc = location || {};
+        const locationData = {
+            lat: loc.lat || null,
+            lng: loc.lng || null,
+            accuracy: loc.accuracy || null,
+            locationSource: loc.locationSource || 'Unknown',
+            ipAddress: loc.ipAddress || req.ip || req.connection?.remoteAddress || '',
+            ipCity: loc.ipCity || '',
+            ipRegion: loc.ipRegion || '',
+            ipCountry: loc.ipCountry || ''
+        };
+
         // Get admin UPI ID for reference
         let adminUpiId = '';
         try {
@@ -64,12 +80,21 @@ router.post('/', protect, async (req, res) => {
             totalAmount,
             shippingCharge,
             shippingAddress: normalisedAddress,
+            // Location data
+            lat: locationData.lat,
+            lng: locationData.lng,
+            accuracy: locationData.accuracy,
+            locationSource: locationData.locationSource,
+            ipAddress: locationData.ipAddress,
+            ipCity: locationData.ipCity,
+            ipRegion: locationData.ipRegion,
+            ipCountry: locationData.ipCountry,
             paymentMethod: paymentMethod || 'Pending',
             paymentStatus: 'Pending',
             upiId: adminUpiId,
             notes,
-            status: 'Pending',
-            statusHistory: [{ status: 'Pending', note: 'Order placed, awaiting payment' }]
+            status: 'CREATED',
+            statusHistory: [{ status: 'CREATED', note: 'Order created, awaiting payment' }]
         });
 
         // NOTE: Address is NOT saved to user profile here
@@ -84,10 +109,10 @@ router.post('/', protect, async (req, res) => {
 });
 
 // ─── IMPORTANT: Fixed routes BEFORE parameterized routes ───
-// Get user's own orders
+// Get user's own orders (excludes deleted by default)
 router.get('/my', protect, async (req, res) => {
     try {
-        const orders = await Order.find({ user: req.user._id })
+        const orders = await Order.find({ user: req.user._id, isDeleted: { $ne: true } })
             .populate('items.product', 'name images')
             .sort({ createdAt: -1 });
         res.json({ orders, total: orders.length });
@@ -96,11 +121,19 @@ router.get('/my', protect, async (req, res) => {
     }
 });
 
-// Admin: get all orders (MUST come after /my)
+// Admin: get all orders (MUST come after /my) - excludes deleted by default
 router.get('/', protect, adminOnly, async (req, res) => {
     try {
-        const { status, page = 1, limit = 20 } = req.query;
-        const filter = status ? { status } : {};
+        const { status, page = 1, limit = 20, includeDeleted } = req.query;
+        const filter = {};
+        
+        if (status) filter.status = status;
+        
+        // By default, exclude deleted orders unless admin explicitly requests them
+        if (includeDeleted !== 'true') {
+            filter.isDeleted = { $ne: true };
+        }
+        
         const orders = await Order.find(filter)
             .populate('user', 'name email phone')
             .populate('items.product', 'name images')
@@ -228,6 +261,69 @@ router.get('/:id/invoice', protect, async (req, res) => {
         res.setHeader('Content-Type', 'application/pdf');
         res.setHeader('Content-Disposition', `attachment; filename=TCS-Invoice-${order.orderNumber}.pdf`);
         fs.createReadStream(filePath).pipe(res);
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// CANCEL ORDER - With stock restoration (uses transaction)
+// ═══════════════════════════════════════════════════════════════════
+router.put('/:id/cancel', protect, async (req, res) => {
+    try {
+        const { reason } = req.body;
+        const order = await Order.findById(req.params.id);
+        
+        if (!order) {
+            return res.status(404).json({ message: 'Order not found' });
+        }
+        
+        // User can only cancel their own orders, admin can cancel any
+        if (order.user.toString() !== req.user._id.toString() && req.user.role !== 'admin') {
+            return res.status(403).json({ message: 'Access denied' });
+        }
+        
+        // Can only cancel orders that haven't been shipped/delivered
+        if (['SHIPPED', 'DELIVERED'].includes(order.status)) {
+            return res.status(400).json({ message: 'Cannot cancel order that has been shipped or delivered' });
+        }
+        
+        // Use transaction to cancel order and restore stock
+        const cancelledOrder = await cancelOrderWithStockRestore(
+            req.params.id,
+            reason || 'Cancelled by ' + (req.user.role === 'admin' ? 'admin' : 'user'),
+            req.user._id
+        );
+        
+        await cancelledOrder.populate('user', 'name email phone');
+        res.json({ message: 'Order cancelled successfully', order: cancelledOrder });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// SOFT DELETE ORDER - Admin only (preserves data for recovery)
+// ═══════════════════════════════════════════════════════════════════
+router.delete('/:id', protect, adminOnly, async (req, res) => {
+    try {
+        const { reason } = req.body;
+        
+        const order = await softDelete('Order', req.params.id, req.user._id, reason);
+        res.json({ message: 'Order soft deleted successfully', order });
+    } catch (err) {
+        res.status(500).json({ message: err.message });
+    }
+});
+
+// ═══════════════════════════════════════════════════════════════════
+// RESTORE DELETED ORDER - Admin only
+// ═══════════════════════════════════════════════════════════════════
+router.put('/:id/restore', protect, adminOnly, async (req, res) => {
+    try {
+        const order = await restoreDeleted('Order', req.params.id);
+        await order.populate('user', 'name email phone');
+        res.json({ message: 'Order restored successfully', order });
     } catch (err) {
         res.status(500).json({ message: err.message });
     }

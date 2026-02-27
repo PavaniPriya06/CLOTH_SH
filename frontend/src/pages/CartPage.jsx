@@ -4,12 +4,10 @@ import { motion } from 'framer-motion';
 import { FiTrash2, FiMinus, FiPlus } from 'react-icons/fi';
 import { useCart } from '../context/CartContext';
 import { useAuth } from '../context/AuthContext';
-import api from '../utils/api';
+import api, { getMediaUrl } from '../utils/api';
 import toast from 'react-hot-toast';
 import AddressModal from '../components/AddressModal';
 import PaymentModal from '../components/PaymentModal';
-
-const API_URL = 'http://localhost:5000';
 
 export default function CartPage() {
     const { items, removeFromCart, updateQuantity, clearCart, totalAmount, shippingCharge, grandTotal } = useCart();
@@ -48,6 +46,17 @@ export default function CartPage() {
                     city: addressData.city,
                     state: addressData.state,
                     pincode: addressData.pincode
+                },
+                // Location data from AddressModal
+                location: {
+                    lat: addressData.lat,
+                    lng: addressData.lng,
+                    accuracy: addressData.accuracy,
+                    locationSource: addressData.locationSource,
+                    ipAddress: addressData.ipAddress,
+                    ipCity: addressData.ipCity,
+                    ipRegion: addressData.ipRegion,
+                    ipCountry: addressData.ipCountry
                 },
                 paymentMethod: 'Pending', // Will be set during payment
                 saveAddress: true // Save address to user profile
@@ -114,7 +123,7 @@ export default function CartPage() {
                                 <motion.div key={item.key} layout initial={{ opacity: 0 }} animate={{ opacity: 1 }}
                                     className="flex gap-6 pb-6 border-b border-cream-300 last:border-0">
                                     <div className="w-24 h-32 rounded-2xl overflow-hidden flex-shrink-0 bg-cream-200 shadow-sm">
-                                        <img src={item.image ? `${API_URL}${item.image}` : `https://placehold.co/120x160/F5F0E8/4A3728?text=${encodeURIComponent(item.name)}`}
+                                        <img src={item.image ? getMediaUrl(item.image) : `https://placehold.co/120x160/F5F0E8/4A3728?text=${encodeURIComponent(item.name)}`}
                                             alt={item.name} className="w-full h-full object-cover" />
                                     </div>
                                     <div className="flex-1 min-w-0 flex flex-col justify-between">

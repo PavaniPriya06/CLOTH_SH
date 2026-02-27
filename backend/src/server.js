@@ -6,6 +6,9 @@ const session = require('express-session');
 const passport = require('passport');
 require('dotenv').config();
 
+// Import database config (production-grade)
+const { connectDB, disconnectDB, getDBHealth } = require('./config/database');
+
 // Import routes
 const authRoutes = require('./routes/auth');
 const productRoutes = require('./routes/products');
@@ -13,6 +16,7 @@ const cartRoutes = require('./routes/cart');
 const orderRoutes = require('./routes/orders');
 const paymentRoutes = require('./routes/payment');
 const settingsRoutes = require('./routes/settings');
+const adminExportRoutes = require('./routes/adminExport');
 
 // Import passport config
 require('./config/passport');
@@ -20,27 +24,72 @@ require('./config/passport');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// ═══════════════════════════════════════════════════════════════════
+// KEEP SERVER STABLE - Prevent crashes from unhandled errors
+// ═══════════════════════════════════════════════════════════════════
+process.on('uncaughtException', (err) => {
+    console.error('❌ Uncaught Exception (server continues):', err.message);
+    // Don't exit - keep server running
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+    console.error('❌ Unhandled Rejection (server continues):', reason);
+    // Don't exit - keep server running
+});
+
+// Graceful shutdown with proper cleanup
+const gracefulShutdown = async (signal) => {
+    console.log(`\n📴 ${signal} received. Starting graceful shutdown...`);
+    
+    // Close server to stop accepting new connections
+    if (global.server) {
+        console.log('   Closing HTTP server...');
+        global.server.close();
+    }
+    
+    // Close database connection
+    await disconnectDB();
+    
+    console.log('✅ Graceful shutdown complete');
+    process.exit(0);
+};
+
+process.on('SIGTERM', () => gracefulShutdown('SIGTERM'));
+process.on('SIGINT', () => gracefulShutdown('SIGINT'));
+
 // Middleware
 app.use(cors({
     origin: function(origin, callback) {
-        // Allow requests with no origin (mobile apps, Postman, etc.)
+        // Allow requests with no origin (mobile apps, UPI deep links, Postman, etc.)
         if (!origin) return callback(null, true);
         
         const allowedOrigins = [
             'http://localhost:5173',
             'http://localhost:3000',
+            'http://localhost:5000',
             process.env.CLIENT_URL
         ].filter(Boolean);
         
-        // Allow any Vercel or Render domain
-        if (origin.includes('vercel.app') || origin.includes('onrender.com') || allowedOrigins.includes(origin)) {
+        // Allow any Vercel or Render domain, or localhost for dev
+        if (origin.includes('vercel.app') || 
+            origin.includes('onrender.com') || 
+            origin.includes('localhost') ||
+            allowedOrigins.includes(origin)) {
             return callback(null, true);
         }
         
-        callback(null, true); // Allow all in development
+        // Allow all origins in production for mobile browser compatibility
+        callback(null, true);
     },
-    credentials: true
+    credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin'],
+    exposedHeaders: ['Content-Range', 'X-Content-Range'],
+    maxAge: 86400 // 24 hours - cache preflight responses
 }));
+
+// Handle preflight requests explicitly for mobile browsers
+app.options('*', cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(session({
@@ -61,49 +110,47 @@ app.use('/api/cart', cartRoutes);
 app.use('/api/orders', orderRoutes);
 app.use('/api/payment', paymentRoutes);
 app.use('/api/settings', settingsRoutes);
+app.use('/api/admin/export', adminExportRoutes);
 
-// Health check
+// Health check with comprehensive MongoDB status
 app.get('/api/health', (req, res) => {
-    res.json({ status: 'TCS Backend Running!', time: new Date() });
+    const dbHealth = getDBHealth();
+    res.json({ 
+        status: 'TCS Backend Running!', 
+        time: new Date(),
+        environment: process.env.NODE_ENV || 'development',
+        database: {
+            status: dbHealth.state,
+            connected: dbHealth.connected,
+            host: dbHealth.host,
+            name: dbHealth.database
+        },
+        uptime: Math.floor(process.uptime()) + 's',
+        memory: {
+            used: Math.round(process.memoryUsage().heapUsed / 1024 / 1024) + 'MB',
+            total: Math.round(process.memoryUsage().heapTotal / 1024 / 1024) + 'MB'
+        }
+    });
 });
 
-// Connect to MongoDB
-const connectDB = async () => {
-    let uri = process.env.MONGODB_URI;
-    let connected = false;
-
-    // Try connecting to the configured URI first
-    if (uri) {
-        try {
-            await mongoose.connect(uri, { serverSelectionTimeoutMS: 5000 });
-            console.log('✅ MongoDB Connected to:', uri.includes('@') ? '[Atlas]' : uri);
-            connected = true;
-        } catch (connectErr) {
-            console.log('⚠️ Could not connect to configured MongoDB at', uri);
-            console.log('📝 Falling back to in-memory database...');
-        }
-    }
-
-    // Fallback to MongoDB Memory Server if Atlas fails
+// ═══════════════════════════════════════════════════════════════════
+// INITIALIZE DATABASE AND SEED ADMIN
+// Uses production-grade MongoDB Atlas connection from config/database.js
+// NO in-memory fallback - data persistence is MANDATORY
+// ═══════════════════════════════════════════════════════════════════
+const initializeDatabase = async () => {
+    const connected = await connectDB();
+    
     if (!connected) {
-        try {
-            const { MongoMemoryServer } = require('mongodb-memory-server');
-            const mongoServer = await MongoMemoryServer.create();
-            const memoryUri = mongoServer.getUri();
-            await mongoose.connect(memoryUri);
-            console.log('✅ MongoDB Memory Server Connected');
-            console.log('ℹ️ Using in-memory database. Data will be lost on restart.');
-        } catch (memErr) {
-            console.error('❌ Failed to start Memory Server:', memErr.message);
-            return;
-        }
+        console.log('⚠️ Database not connected - some features will be unavailable');
+        return;
     }
-
+    
     // Seed admin user
     try {
         const User = require('./models/User');
         const adminEmail = process.env.ADMIN_EMAIL || 'admin@tcs.com';
-        const existing = await User.findOne({ email: adminEmail });
+        const existing = await User.findOne({ email: adminEmail, isDeleted: { $ne: true } });
         if (!existing) {
             await User.create({
                 name: 'TCS Admin',
@@ -120,7 +167,7 @@ const connectDB = async () => {
     }
 };
 
-connectDB();
+initializeDatabase();
 
 // Serve frontend static files in production
 if (process.env.NODE_ENV === 'production') {
@@ -135,6 +182,30 @@ if (process.env.NODE_ENV === 'production') {
     });
 }
 
-app.listen(PORT, () => {
+// ═══════════════════════════════════════════════════════════════════
+// START SERVER WITH ERROR HANDLING
+// ═══════════════════════════════════════════════════════════════════
+const server = app.listen(PORT, () => {
+    console.log('═══════════════════════════════════════════════════════════════════');
     console.log(`🚀 TCS Server running on http://localhost:${PORT}`);
+    console.log(`📦 Environment: ${process.env.NODE_ENV || 'development'}`);
+    console.log(`♻️ Auto-reconnect enabled - server will stay connected`);
+    console.log(`💾 Data persistence: MongoDB Atlas (production-grade)`);
+    console.log('═══════════════════════════════════════════════════════════════════');
+});
+
+// Store server reference for graceful shutdown
+global.server = server;
+
+// Keep server alive - prevent idle timeout (especially on Render/Heroku)
+server.keepAliveTimeout = 65000;  // 65 seconds
+server.headersTimeout = 66000;   // Slightly more than keepAliveTimeout
+
+// Handle server errors without crashing
+server.on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Port ${PORT} already in use. Server running elsewhere?`);
+    } else {
+        console.error('❌ Server error:', err.message);
+    }
 });

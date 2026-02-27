@@ -26,8 +26,24 @@ const userSchema = new mongoose.Schema({
         lng: Number,
         isDefault: { type: Boolean, default: false }
     }],
-    isActive: { type: Boolean, default: true }
+    isActive: { type: Boolean, default: true },
+    
+    // ═══════════════════════════════════════════════════════════════════
+    // SOFT DELETE - Never permanently delete user data
+    // ═══════════════════════════════════════════════════════════════════
+    isDeleted: { type: Boolean, default: false, index: true },
+    deletedAt: { type: Date },
+    deletedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
 }, { timestamps: true });
+
+// ═══════════════════════════════════════════════════════════════════
+// INDEXES for faster queries
+// ═══════════════════════════════════════════════════════════════════
+userSchema.index({ email: 1 });
+userSchema.index({ phone: 1 });
+userSchema.index({ role: 1 });
+userSchema.index({ createdAt: -1 });
+userSchema.index({ isDeleted: 1, role: 1 });  // Compound index for admin queries
 
 // Hash password before saving
 userSchema.pre('save', async function (next) {

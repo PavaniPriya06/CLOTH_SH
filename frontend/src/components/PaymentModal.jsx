@@ -1,6 +1,6 @@
 import { useState, useEffect } from 'react';
 import { motion, AnimatePresence } from 'framer-motion';
-import { FiX, FiCreditCard, FiSmartphone, FiCheckCircle, FiShield, FiLock } from 'react-icons/fi';
+import { FiX, FiCreditCard, FiSmartphone, FiCheckCircle, FiShield, FiLock, FiTruck } from 'react-icons/fi';
 import api from '../utils/api';
 import toast from 'react-hot-toast';
 
@@ -59,6 +59,19 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
                 amount: amount
             });
 
+            // Save shipping address to sessionStorage for mobile callback recovery
+            if (order.shippingAddress) {
+                sessionStorage.setItem('pendingShippingAddress', JSON.stringify(order.shippingAddress));
+                sessionStorage.setItem('pendingOrderAmount', String(amount));
+            }
+
+            // Detect if mobile device
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            
+            // Get the base URL for callbacks
+            const baseUrl = window.location.origin;
+            const callbackUrl = `${baseUrl}/payment-callback/${order._id}`;
+
             const options = {
                 key: razorpayKey,
                 amount: rpOrder.amount,
@@ -70,13 +83,16 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
                     name: order.shippingAddress?.fullName || '',
                     contact: order.shippingAddress?.phone || '',
                 },
+                // Mobile-specific: redirect callback URL
+                callback_url: isMobile ? callbackUrl : undefined,
+                redirect: isMobile,
                 config: {
                     display: {
                         blocks: {
                             upi: {
                                 name: "Pay via UPI",
                                 instruments: [
-                                    { method: "upi", flows: ["qrcode", "collect", "intent"] }
+                                    { method: "upi", flows: isMobile ? ["intent", "qrcode"] : ["qrcode", "collect", "intent"] }
                                 ]
                             }
                         },
@@ -112,6 +128,9 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
                         });
                         
                         if (verifyRes.data.success && verifyRes.data.orderId) {
+                            // Clear sessionStorage after successful verification
+                            sessionStorage.removeItem('pendingShippingAddress');
+                            sessionStorage.removeItem('pendingOrderAmount');
                             toast.success('✅ Order Placed Successfully! 🎉');
                             onSuccess(verifyRes.data.orderId); // Pass auto-created order ID
                         } else {
@@ -152,6 +171,19 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
                 amount: amount
             });
 
+            // Save shipping address to sessionStorage for mobile callback recovery
+            if (order.shippingAddress) {
+                sessionStorage.setItem('pendingShippingAddress', JSON.stringify(order.shippingAddress));
+                sessionStorage.setItem('pendingOrderAmount', String(amount));
+            }
+
+            // Detect if mobile device
+            const isMobile = /Android|webOS|iPhone|iPad|iPod|BlackBerry|IEMobile|Opera Mini/i.test(navigator.userAgent);
+            
+            // Get the base URL for callbacks
+            const baseUrl = window.location.origin;
+            const callbackUrl = `${baseUrl}/payment-callback/${order._id}`;
+
             const options = {
                 key: razorpayKey,
                 amount: rpOrder.amount,
@@ -163,6 +195,9 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
                     name: order.shippingAddress?.fullName || '',
                     contact: order.shippingAddress?.phone || '',
                 },
+                // Mobile-specific: redirect callback URL
+                callback_url: isMobile ? callbackUrl : undefined,
+                redirect: isMobile,
                 theme: { 
                     color: '#D4A574', 
                     backdrop_color: '#2C1810'
@@ -185,6 +220,9 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
                             orderId: order._id
                         });
                         
+                        // Clear sessionStorage after successful verification
+                        sessionStorage.removeItem('pendingShippingAddress');
+                        sessionStorage.removeItem('pendingOrderAmount');
                         toast.success('Payment successful! 🎉');
                         onSuccess(verifyRes.data.orderId);
                     } catch (err) {
@@ -203,6 +241,32 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
             rzp.open();
         } catch (err) {
             toast.error(err.response?.data?.message || 'Could not initiate payment');
+            setLoading(false);
+        }
+    };
+
+    // Cash on Delivery Handler
+    const handleCOD = async () => {
+        if (amount > 5000) {
+            toast.error('COD is only available for orders up to ₹5,000');
+            return;
+        }
+        
+        setLoading(true);
+        try {
+            const { data } = await api.post('/payment/cod', {
+                orderId: order._id
+            });
+            
+            if (data.success) {
+                toast.success('🎉 Order placed successfully! Pay on delivery.');
+                onSuccess(data.orderId);
+            } else {
+                toast.error(data.message || 'Could not place COD order');
+            }
+        } catch (err) {
+            toast.error(err.response?.data?.message || 'Could not place COD order');
+        } finally {
             setLoading(false);
         }
     };
@@ -283,11 +347,12 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
                         {/* Method Tabs */}
                         <div className="flex gap-2 bg-cream-100 rounded-2xl p-1.5">
                             {[
-                                { id: 'razorpay', label: 'UPI (Recommended)', icon: FiSmartphone },
-                                { id: 'all', label: 'All Methods', icon: FiCreditCard },
+                                { id: 'razorpay', label: 'UPI', icon: FiSmartphone },
+                                { id: 'all', label: 'Cards/Banks', icon: FiCreditCard },
+                                { id: 'cod', label: 'Cash on Delivery', icon: FiTruck },
                             ].map(({ id, label, icon: Icon }) => (
                                 <button key={id} onClick={() => setMethod(id)}
-                                    className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-sans text-sm font-medium transition-all ${method === id ? 'bg-white text-charcoal shadow-soft' : 'text-charcoal-muted hover:text-charcoal'}`}>
+                                    className={`flex-1 flex items-center justify-center gap-2 py-3 rounded-xl font-sans text-xs font-medium transition-all ${method === id ? 'bg-white text-charcoal shadow-soft' : 'text-charcoal-muted hover:text-charcoal'}`}>
                                     <Icon className="w-4 h-4" /> {label}
                                 </button>
                             ))}
@@ -372,6 +437,59 @@ export default function PaymentModal({ isOpen, onClose, onSuccess, order, amount
                                     )}
                                     {loading ? 'Opening Razorpay...' : `Pay ₹${amount?.toLocaleString()}`}
                                 </motion.button>
+                            </motion.div>
+                        )}
+
+                        {/* Cash on Delivery */}
+                        {method === 'cod' && (
+                            <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-4">
+                                <div className="bg-cream-100 rounded-2xl p-5 space-y-3">
+                                    <div className="flex items-center justify-center gap-3 mb-3">
+                                        <FiTruck className="w-8 h-8 text-charcoal" />
+                                        <span className="font-sans text-lg font-bold text-charcoal">Cash on Delivery</span>
+                                    </div>
+                                    <p className="font-sans text-sm text-charcoal-muted text-center">
+                                        Pay when your order arrives at your doorstep
+                                    </p>
+                                    {[
+                                        '🚚 Pay only when you receive the product',
+                                        '💵 Cash / UPI accepted on delivery',
+                                        '📦 Inspect before you pay',
+                                        '🔄 Easy returns if not satisfied'
+                                    ].map(m => (
+                                        <div key={m} className="flex items-center gap-2 text-sm font-sans text-charcoal-muted">
+                                            <FiCheckCircle className="text-green-500 w-4 h-4 flex-shrink-0" />
+                                            {m}
+                                        </div>
+                                    ))}
+                                </div>
+                                
+                                {amount > 5000 && (
+                                    <div className="bg-amber-50 border border-amber-200 rounded-xl p-3 text-center">
+                                        <p className="font-sans text-xs text-amber-700">
+                                            ⚠️ COD available for orders up to ₹5,000. For larger orders, please use online payment.
+                                        </p>
+                                    </div>
+                                )}
+
+                                <motion.button 
+                                    onClick={handleCOD} 
+                                    disabled={loading || amount > 5000}
+                                    whileHover={{ scale: loading || amount > 5000 ? 1 : 1.02 }} 
+                                    whileTap={{ scale: loading || amount > 5000 ? 1 : 0.98 }}
+                                    className="btn-primary w-full flex items-center justify-center gap-3 py-4 text-lg disabled:opacity-70"
+                                >
+                                    {loading ? (
+                                        <span className="animate-spin rounded-full h-5 w-5 border-b-2 border-white" />
+                                    ) : (
+                                        <FiTruck className="w-5 h-5" />
+                                    )}
+                                    {loading ? 'Placing Order...' : `Place COD Order — ₹${amount?.toLocaleString()}`}
+                                </motion.button>
+                                
+                                <p className="text-xs text-center text-charcoal-muted">
+                                    Please keep exact change ready for faster delivery
+                                </p>
                             </motion.div>
                         )}
 
