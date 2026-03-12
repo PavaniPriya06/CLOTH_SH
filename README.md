@@ -1,4 +1,4 @@
-# TCS – The Co-ord Set Studio 👗
+# TCS – The Co-ord Set Studio 
 
 A full-stack e-commerce platform for a local clothing service, built with React.js, Node.js, Tailwind CSS, and MongoDB.
 
@@ -46,7 +46,7 @@ Open **http://localhost:5173**
 
 ---
 
-## 📁 Project Structure
+##  Project Structure
 
 ```
 CLOTH_AG/
@@ -73,19 +73,19 @@ CLOTH_AG/
 
 | Feature | Status |
 |---|---|
-| Admin Dashboard (Add/Edit/Delete Products) | ✅ |
-| Multi-image upload | ✅ |
-| User Registration (Email/Phone) | ✅ |
-| Facebook Social Login | ✅ (needs App ID) |
-| Instagram-style landing page | ✅ |
-| New Arrivals with oval/arch frames | ✅ |
-| Shopping Cart | ✅ |
-| 3-step Checkout | ✅ |
-| Cash on Delivery | ✅ |
-| Razorpay Payment | ✅ (needs API keys) |
-| PDF Receipt download | ✅ |
-| Order status tracker | ✅ |
-| Admin order management | ✅ |
+| Admin Dashboard (Add/Edit/Delete Products) 
+| Multi-image upload 
+| User Registration (Email/Phone)
+| Facebook Social Login 
+| Instagram-style landing page 
+| New Arrivals with oval/arch frames
+| Shopping Cart 
+| 3-step Checkout
+| Cash on Delivery 
+| Razorpay Payment 
+| PDF Receipt download 
+| Order status tracker 
+| Admin order management
 
 ## 🔑 API Keys Needed
 
